@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.venv/
+venv/
+.DS_Store
+.vscode/
+# Large data / model artifacts
+*.pt
+*.pth
+*.ckpt
+data/
