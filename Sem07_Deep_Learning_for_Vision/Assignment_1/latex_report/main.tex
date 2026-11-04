@@ -147,7 +147,7 @@
     \vspace{0.4cm}
     {\Large University of Moratuwa \par}
      \vspace{0.2cm}
-     {\Large Department of Electronic and Telecommunication \par}
+     {\Large Department of Electronic and Telecommunication Engineering \par}
 
     \vspace{1cm}
     
@@ -257,8 +257,9 @@ AdaLoRA $-$ LoRA          &                 & $-3.6$ [$-6.5$, $-0.7$] & $-5.9$ [
 \end{table}
 
 \textbf{Baseline vs adapted.} LoRA improves on zero-shot by +9.3 points on TextVQA and +6.2 on OK-VQA.
-\textbf{AdaLoRA does \emph{not} transfer its accuracy benefit}: at equal budget it is significantly \emph{worse}
-than LoRA on both tasks (both CIs exclude 0), and on OK-VQA it barely beats zero-shot. A likely reason is that our
+\textbf{AdaLoRA does \emph{not} transfer its accuracy benefit}: at equal budget it is \emph{worse}
+than LoRA on both tasks (both CIs exclude 0, but they cover only the choice of evaluation questions; seed
+variance was not measured), and on OK-VQA it barely beats zero-shot. A likely reason is that our
 Colab-scale schedule (156 steps) is orders of magnitude shorter than the paper's GLUE fine-tuning. Pruning a third of the singular values within 100
 steps discards directions that are still being learned. An earlier run with a later, slower pruning schedule gave
 the same ranking.
@@ -295,14 +296,17 @@ opposite of the prediction. The two allocations are strongly correlated across t
 (Spearman $\rho=0.83$, Pearson $r=0.89$). In this model the allocation is driven by the \emph{architecture}, not by
 what the task demands from each modality. The same holds in an independent earlier run (23.2\% vs 24.4\%).
 
-\textbf{H2 holds partially, and the exception is vision-specific.}
+\textbf{H2 holds partially.}
 \begin{itemize}
     \item \emph{FFN $>$ attention transfers to both towers}, most strongly in the vision encoder (10.5--11.3 vs
-    5.1--5.7). Query and key projections are pruned almost entirely; value, output and FFN matrices stay near full rank.
+    5.1--5.7), where query and key projections are pruned almost entirely in most layers. In the LM the gap is
+    smaller (attention 6.9--7.4 vs FFN 9.6--9.7).
     \item \emph{Top layers $>$ bottom layers holds in the vision encoder}: mean rank rises from about 4 to 12 with depth.
-    \item \emph{It reverses in the language model.} Rank peaks at 40--70\% depth, and layers 21--29 are pruned to
-    almost zero. Our interpretation: the middle LM layers are where image tokens are fused with the question, so that
+    \item \emph{It reverses in the language model.} Rank peaks at 40--70\% depth, then falls sharply from layer 21
+    to almost zero at layers 24--26, recovering only partly (about 3--6) in the last layers. Our interpretation: the middle LM layers are where image tokens are fused with the question, so that
     is where adaptation pays off. The top layers only map to a short answer vocabulary.
+    Whether this reversal is specific to vision--language models is untested: we ran no text-only control, and
+    DeBERTa is an encoder while SmolLM2 is a decoder, which could also explain it.
     \item \emph{The connector keeps full rank} in every run: as the only path between the towers, it is always
     among the most important matrices.
 \end{itemize}
@@ -344,7 +348,7 @@ task's allocation does almost as well (within 0.3 points), which agrees with the
 \textbf{Conclusion.} The NLP finding that \emph{FFN matrices matter more} transfers to both towers of a VLM.
 \emph{Top layers matter more} transfers only to the vision encoder, and \emph{reverses} in the language model.
 The cross-modal split of the budget is task-invariant ($\rho=0.83$), which rejects our task--modality hypothesis.
-At Colab-scale training, AdaLoRA's adaptive pruning is significantly worse than uniform LoRA. Its discovered
+At Colab-scale training, AdaLoRA's adaptive pruning did worse than uniform LoRA (CIs exclude 0; seed variance not measured). Its discovered
 allocation may still be useful when reused by plain LoRA. Code: \texttt{part1.ipynb} (seed 42; results, adapters,
 allocations, per-question scores and figures are saved by the notebook).
 
@@ -408,7 +412,7 @@ The baseline never produced malformed JSON: all of its validity failures were to
     \end{tabular}
 
     \vspace{3pt}
-    One category per request; ``missed call'' includes chains cut short. On the same requests, LoRA \textbf{fixed 49} of the 56 baseline failures, \textbf{left 7 unfixed} and \textbf{introduced 1}. All 8 LoRA failures were inspected (only 8 exist, fewer than the 10 asked for), along with 10 baseline failures.
+    One category per request; ``missed call'' includes chains cut short. A request is a \emph{failure} if it fails any of the four metrics, so the 56 baseline failures include 11 with a correct final answer (task success alone gives 45). On the same requests, LoRA \textbf{fixed 49} of the 56 baseline failures, \textbf{left 7 unfixed} and \textbf{introduced 1}. All 8 LoRA failures were inspected (only 8 exist, fewer than the 10 asked for), along with 10 baseline failures.
 \end{minipage}\hfill
 \begin{minipage}[t]{0.60\linewidth}
     \vspace{0pt}
