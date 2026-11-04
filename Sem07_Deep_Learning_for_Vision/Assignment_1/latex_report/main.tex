@@ -1,4 +1,5 @@
 \documentclass[12pt,a4paper]{article}
+\PassOptionsToPackage{table}{xcolor}
 
 % ----- GROUPED PACKAGES -----
 % General Utilities
@@ -10,7 +11,7 @@
 \usepackage{ragged2e}
 \usepackage[normalem]{ulem}
 \usepackage{hyperref}
-\hypersetup{colorlinks=true, urlcolor=blue}
+\hypersetup{colorlinks=true, urlcolor=blue, allcolors=blue}
 % Graphics and Drawing
 \usepackage{graphicx}
 \usepackage{pgf}
@@ -40,8 +41,6 @@
 % Code Listings
 \usepackage{listings}
 
-% Referencing
-\usepackage[colorlinks=true, allcolors=blue]{hyperref}
 
 % ----- CUSTOM DEFINITIONS -----
 
@@ -101,7 +100,6 @@
     belowskip=0.7\baselineskip,
     abovecaptionskip=5pt,
     belowcaptionskip=5pt,
-    captionmargin=5pt,
     escapechar=!,
     prebreak=\raisebox{0ex}[0ex][0ex]{\ensuremath{\hookleftarrow}},
     postbreak=\raisebox{0ex}[0ex][0ex]{\ensuremath{\hookrightarrow}},
@@ -111,8 +109,7 @@
 % For even wider code blocks
 \lstset{
     frame=lrtb,
-    framerule=0.5pt,
-    framextendmargin=5pt
+    framerule=0.5pt
 }
 
 % Set page margins
@@ -134,9 +131,9 @@
     \centering
     \vspace{1cm}
 
-    \includegraphics[width=0.25\linewidth]{university (1).png}\\
+    \includegraphics[width=0.25\linewidth]{university.png}\\
     \vspace{0.4cm}
-    \includegraphics[width=0.2\linewidth]{entc (2).png}\\
+    \includegraphics[width=0.2\linewidth]{entc1.png}\\
     
     \vspace{0.4cm}
     {\Large University of Moratuwa \par}
@@ -168,6 +165,83 @@
     \end{center}
 \end{titlepage}
 
+% ===================== Part 1 (Sulojan R.) goes here =====================
 
+
+% ===================== Part 2: LLM Agents, Tool Calling ====================
+\newgeometry{top=0.5in, bottom=0.55in, left=0.6in, right=0.6in}
+\begingroup
+\titleformat*{\section}{\large\bfseries}
+\titleformat*{\subsection}{\normalsize\bfseries}
+\titlespacing*{\section}{0pt}{0pt}{4pt}
+\titlespacing*{\subsection}{0pt}{6pt}{2pt}
+\setlength{\topsep}{2pt}
+\section*{Part 2: LoRA Fine-tuning a Small LLM for Tool Calling}
+\footnotesize
+\setlength{\parskip}{2pt}
+\setlength{\parindent}{0pt}
+
+\subsection*{1. Setup}
+\begin{itemize}
+    \item \textbf{Model:} Qwen2.5-0.5B-Instruct, used through its built-in tool-calling chat template (each call is a JSON object wrapped in \verb|<tool_call>| tags). Greedy decoding, at most 128 new tokens per turn.
+    \item \textbf{Tools (4):} \verb|calculator| (arithmetic), \verb|unit_convert| (length, mass, $^\circ$C/$^\circ$F), \verb|get_weather| (made-up weather for six Sri Lankan cities) and \verb|lookup_order| (60 made-up orders). The invented values force the model to call the tools instead of answering from memory.
+    \item \textbf{Agent loop:} generate $\rightarrow$ parse any tool call $\rightarrow$ execute it $\rightarrow$ append the result as a tool message $\rightarrow$ repeat, until a plain-text reply or 4 steps.
+    \item \textbf{Data:} template-generated, with gold answers computed by running the tools. \textbf{Train: 1{,}200} requests (856 single-call, 118 two-call chains, 226 needing no tool). \textbf{Test: 100} requests (68 single-call, 5 chains, 27 no-tool; 77 unique), built from separately written templates with different wording. No test request appears in the training set.
+    \item \textbf{LoRA:} $r=16$, $\alpha=32$, dropout 0.05 on the q, k, v, o, gate, up and down projections (8.80\,M trainable parameters, 1.75\,\%). Loss on assistant tokens only; system, user and tool-result tokens are masked. 2 epochs, learning rate $2\times10^{-4}$ (cosine, 5 warm-up steps), effective batch 16 (micro-batch $2\times8$ accumulation, because batch 8 ran out of memory with Qwen's 152k-token vocabulary), fp16 mixed precision, seed 42. 150 steps in 6\,min\,42\,s on a Colab T4; training loss fell from 0.34 to 0.0003.
+\end{itemize}
+
+\subsection*{2. Baseline vs.\ LoRA (same 100-request test set)}
+\begin{center}
+\begin{tabular}{@{}llrrr@{}}
+    \toprule
+    \textbf{Metric} & \textbf{Definition (denominator)} & \textbf{Baseline} & \textbf{LoRA} & \textbf{Change} \\
+    \midrule
+    Call validity & made $\geq 1$ call, all well-formed (tool requests, $n=73$) & 83.6\,\% & \textbf{100.0\,\%} & +16.4 \\
+    Call accuracy & right tool(s) and right arguments ($n=73$) & 68.5\,\% & \textbf{90.4\,\%} & +21.9 \\
+    Abstention & answered without a tool when none was needed ($n=27$) & 59.3\,\% & \textbf{96.3\,\%} & +37.0 \\
+    Task success & final answer contains the gold facts, end to end ($n=100$) & 55.0\,\% & \textbf{92.0\,\%} & +37.0 \\
+    \bottomrule
+\end{tabular}
+\end{center}
+The baseline never produced malformed JSON: all of its validity failures were tool requests where it made no call at all.
+
+\subsection*{3. Failure analysis}
+\noindent
+\begin{minipage}[t]{0.37\linewidth}
+    \vspace{0pt}
+    \begin{tabular}{@{}lrr@{}}
+        \toprule
+        \textbf{Category} & \textbf{Base} & \textbf{LoRA} \\
+        \midrule
+        Ignored tool result & 15 & 0 \\
+        Missed call & 14 & 0 \\
+        Unnecessary call & 11 & 1 \\
+        Wrong no-tool answer & 7 & 0 \\
+        Wrong tool & 6 & 4 \\
+        Wrong arguments & 3 & 3 \\
+        Wrong format & 0 & 0 \\
+        \midrule
+        \textbf{Total failures} & \textbf{56} & \textbf{8} \\
+        \bottomrule
+    \end{tabular}
+
+    \vspace{3pt}
+    One category per request; ``missed call'' includes chains cut short. On the same requests, LoRA \textbf{fixed 49} of the 56 baseline failures, \textbf{left 7 unfixed} and \textbf{introduced 1}. All 8 LoRA failures were inspected (only 8 exist, fewer than the 10 asked for), along with 10 baseline failures.
+\end{minipage}\hfill
+\begin{minipage}[t]{0.60\linewidth}
+    \vspace{0pt}
+    \textbf{Baseline errors were decision errors, not format errors.} It asked the user for data instead of calling (``should I pack a coat?'' $\rightarrow$ ``could you provide the current temperature?''), called tools for general knowledge (\verb|lookup_order(order_id="RAM")| for ``What does RAM stand for?''), refused easy questions (``I can only provide details about mathematical operations and weather'') and misreported correct results (``the backpack is expected to be back in stock in 6 days''). \textbf{LoRA fixed} every ignored result, refusal and wrong-tool error, 10 of the 11 unnecessary calls and 10 of the 14 missed calls.
+
+    \textbf{Not fixed (7):} ``Take $b$ away from $a$'' has wrong arguments in both models, and LoRA computes $b-a$ (2 cases). The boiling-point question still triggers \verb|calculator("0*100")|, answered as ``0 $^\circ$C'' (1). ``I'm travelling to \textit{city}, should I pack a coat?'' moved from a missed call to the wrong tool, \verb|calculator("1*24")|, answered as ``24 hours until you arrive'' (4). \textbf{Introduced (1):} ``Vavuniya weather report, please'' now calls \verb|get_weather(city="Lisbon")|.
+\end{minipage}
+
+\vspace{4pt}
+The remaining LoRA errors share one cause: \textbf{over-fitting to the training templates} (loss $\approx 2\times10^{-4}$ by epoch 2). The model keys on surface patterns, such as reading ``travelling to \textit{city}'' as the trained ``how many hours until \ldots{} arrives'' chain, and operand order in subtraction, rather than on intent. More varied phrasings, paraphrase augmentation or a single epoch would be the next step. The ignored-result count is also somewhat inflated by a strict answer check that requires both the order status and the item.
+
+\subsection*{4. Would a better prompt alone have been enough?}
+Only partly: the baseline already produced well-formed calls through Qwen's built-in tool template, so its failures were decisions (whether to call a tool at all in 32 cases, how to report the result in 15), and a stricter system prompt with a few worked examples could plausibly reduce these without any training. However, a 0.5\,B model follows long instructions unreliably, and LoRA removed 49 of the 56 failures after under seven minutes of training (we did not run a prompt-only ablation to measure the gap). The errors LoRA left come from template over-fitting, which better training data, not a better prompt, would address.
+
+\endgroup
+\restoregeometry
 
 \end{document}
