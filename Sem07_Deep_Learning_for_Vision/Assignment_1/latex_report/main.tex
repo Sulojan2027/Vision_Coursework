@@ -123,6 +123,15 @@
 \predate{\begin{center}\large}
 \postdate{\end{center}}
 
+% ----- Report additions (figures, captions, colours) -----
+\graphicspath{{figures/}}
+\captionsetup{font=small, labelfont=bf}
+% Okabe-Ito (colour-blind safe) accents, matching the notebook figures
+\definecolor{oiblue}{HTML}{0072B2}
+\definecolor{oiverm}{HTML}{D55E00}
+\definecolor{oigreen}{HTML}{009E73}
+\newcommand{\best}[1]{\textbf{#1}}
+
 
 \begin{document}
 
@@ -161,27 +170,200 @@
 
 \vfill
     \begin{center}
+        {\large Code: \href{https://github.com/Sulojan2027/Vision_Coursework/tree/main/Sem07_Deep_Learning_for_Vision/Assignment_1}{\texttt{github.com/Sulojan2027/Vision\_Coursework}} \par}
+        \vspace{0.5cm}
         {\Large 4th of November 2026}
     \end{center}
 \end{titlepage}
 
-% ===================== Part 1 (Sulojan R.) goes here =====================
+% ===================== Part 1: AdaLoRA on a VLM (Sulojan R.) =====================
+\newgeometry{top=0.5in, bottom=0.55in, left=0.6in, right=0.6in}
+\begingroup
+\titlespacing*{\section}{0pt}{0pt}{6pt}
+\titlespacing*{\subsection}{0pt}{6pt}{2pt}
+\section{Part 1: Does AdaLoRA's Rank Allocation Transfer to a Vision--Language Model?}
+\small
+\setlength{\parskip}{3pt}
+\setlength{\parindent}{0pt}
+
+\subsection{Central Claim of the Paper}
+AdaLoRA (Zhang \emph{et al.}, ICLR 2023) argues that the weight matrices of a pre-trained transformer are \emph{not equally
+important} for fine-tuning, so a fixed parameter budget should be \emph{allocated adaptively} rather than spread
+uniformly as in LoRA (Hu \emph{et al.}, ICLR 2022). It parameterises each update in SVD form, $\Delta W = P\Lambda Q$, scores every
+singular triplet by a smoothed sensitivity $|w\cdot\nabla_w\mathcal{L}|$, and prunes the least important
+singular values until a global rank budget is met.
+
+\subsection{Concept Translated and Supporting Evidence}
+We test the paper's \textbf{allocation pattern}: on DeBERTaV3 (GLUE/MNLI), AdaLoRA consistently assigns
+\textbf{more rank to the feed-forward (FFN) matrices and to the top layers} than to attention and lower layers.
+This is shown by the paper's motivating experiment, where fine-tuning only FFN matrices or only top layers beats
+other choices at equal budget (Fig.~1 of the AdaLoRA paper), and by the final rank map of every incremental matrix
+(Fig.~3 of the AdaLoRA paper). % TODO: verify figure numbers against the paper
+The evidence is NLP-only: a VLM adds a vision tower, a connector and a language tower that \emph{share one
+budget}, which raises a question that cannot be asked of a text-only model.
+
+\subsection{Translated Hypothesis}
+\begin{itemize}
+    \item \textbf{H1 (task--modality dependence).} With one global budget over vision encoder, connector and LM,
+    AdaLoRA should move rank towards the modality the task needs: a larger \emph{vision} share for text-reading
+    (TextVQA) than for outside-knowledge questions (OK-VQA), where rank should concentrate in the LM.
+    \item \textbf{H2 (pattern transfer).} Within each tower, the NLP pattern should reappear: FFN $>$ attention,
+    and top layers $>$ bottom layers.
+\end{itemize}
+
+\subsection{Experimental Setup}
+\begin{itemize}
+    \item \textbf{Model.} SmolVLM-256M-Instruct (256.5M parameters; SigLIP vision encoder, pixel-shuffle
+    connector, SmolLM2 language model). It is small enough for several runs on a free Colab T4.
+    \item \textbf{Adapted modules.} All 283 linear layers, under \emph{one} shared budget: 72 in the vision encoder
+    (\texttt{q,k,v,out}, \texttt{fc1,fc2} $\times$ 12 layers), 1 connector projection, and 210 in the LM
+    (\texttt{q,k,v,o}, \texttt{gate,up,down} $\times$ 30 layers). A single budget is what lets rank move between modalities.
+    \item \textbf{Data.} TextVQA (train / validation) and OK-VQA (train / val2014, from a
+    parquet copy). For each task we draw \textbf{2{,}500 training and 500 evaluation} questions at random with
+    seed 42. Images are resized to a 512\,px longest edge. The target is the majority human answer, and the loss is
+    masked to the answer tokens.
+    \item \textbf{Training.} One epoch (156 optimiser steps), batch $4\times4$ (gradient accumulation), AdamW,
+    lr $5\times10^{-4}$, cosine schedule, fp16 autocast with gradient scaling, seed 42.
+    \item \textbf{Equal budget.} LoRA uses $r{=}8$ everywhere ($\alpha{=}16$, 3.87M parameters). AdaLoRA starts at
+    $r{=}12$ and prunes to an average of 8, i.e.\ $8\times283=2{,}264$ singular values in total. Its schedule is a
+    7-step warm-up, reallocation every 5 steps until step 102, then 54 fixed steps to recover
+    ($\beta_1{=}\beta_2{=}0.85$, orthogonality weight 0.5). The logged budget reaches exactly 2{,}264 by step 100.
+    \item \textbf{Metrics.} \emph{Task}: VQA accuracy, $\min(\#\text{matching humans}/3,1)$ averaged over the 10
+    leave-one-out annotator subsets. \emph{Claim-tied}: the final rank of every module, aggregated by tower, module
+    type and depth, plus the rank correlation between the two tasks' allocations. \emph{Significance}: a paired
+    bootstrap over the 500 evaluation questions (10{,}000 resamples, 95\% CI).
+    \item \textbf{Implementation note.} fp16 steps skipped by the gradient scaler carry inf/NaN gradients, which make
+    AdaLoRA's importance scores NaN so that \emph{nothing is ever pruned}; we zero those gradients first.
+\end{itemize}
+
+\subsection{Results and Interpretation}
+
+\begin{table}[!htbp]
+\centering\footnotesize\setlength{\abovecaptionskip}{2pt}
+\caption{VQA accuracy (\%) on 500 held-out questions per task. The last row gives the paired-bootstrap difference
+AdaLoRA $-$ LoRA with its 95\% CI.}
+\label{tab:acc}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Method} & \textbf{Trainable params} & \textbf{TextVQA} & \textbf{OK-VQA} \\
+\midrule
+Zero-shot SmolVLM-256M    & --              & 37.34 & 36.68 \\
+LoRA, uniform $r{=}8$     & 3.87M           & \best{46.62} & \best{42.92} \\
+AdaLoRA, $12\rightarrow8$ & 3.87M$^\dagger$ & 43.04 & 37.04 \\
+AdaLoRA $-$ LoRA          &                 & $-3.6$ [$-6.5$, $-0.7$] & $-5.9$ [$-9.1$, $-2.7$] \\
+\bottomrule
+\end{tabular}\\[2pt]
+{\footnotesize $^\dagger$Same final number of singular values; 5.81M parameters are trained before pruning.}
+\end{table}
+
+\textbf{Baseline vs adapted.} LoRA improves on zero-shot by +9.3 points on TextVQA and +6.2 on OK-VQA.
+\textbf{AdaLoRA does \emph{not} transfer its accuracy benefit}: at equal budget it is significantly \emph{worse}
+than LoRA on both tasks (both CIs exclude 0), and on OK-VQA it barely beats zero-shot. A likely reason is that our
+Colab-scale schedule (156 steps) is orders of magnitude shorter than the paper's GLUE fine-tuning. Pruning a third of the singular values within 100
+steps discards directions that are still being learned. An earlier run with a later, slower pruning schedule gave
+the same ranking.
+
+\begin{table}[!htbp]
+\centering\footnotesize\setlength{\abovecaptionskip}{2pt}
+\caption{Where AdaLoRA put its rank. Left: share of the total budget per tower (uniform LoRA for reference).
+Right: mean final rank per module (uniform $=8$, maximum 12).}
+\label{tab:alloc}
+\begin{tabular}{@{}lccc|lcc@{}}
+\toprule
+\textbf{Tower} & \textbf{Uniform} & \textbf{TextVQA} & \textbf{OK-VQA} & \textbf{Module} & \textbf{TextVQA} & \textbf{OK-VQA} \\
+\midrule
+Vision     & 25.4\% & 22.0\% & 24.1\% & Vision attention & 5.1  & 5.7  \\
+Connector  & 0.4\%  & 0.5\%  & 0.5\%  & Vision FFN       & 10.5 & 11.3 \\
+LM         & 74.2\% & 77.5\% & 75.4\% & LM attention     & 7.4  & 6.9  \\
+           &        &        &        & LM FFN           & 9.6  & 9.7  \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[!htbp]
+\centering
+\includegraphics[width=0.8\linewidth]{alloc_heatmap_textvqa}\\[2pt]
+\includegraphics[width=0.8\linewidth]{rank_vs_depth}
+\caption{\textbf{Top:} final AdaLoRA rank per module on TextVQA (white = pruned; vertical rule separates attention
+from FFN). The OK-VQA map is nearly identical. \textbf{Bottom:} mean rank against relative depth for TextVQA
+(blue) and OK-VQA (vermillion).}
+\label{fig:alloc}
+\end{figure}
+
+\textbf{H1 is rejected.} The vision share is \emph{lower} for the text-reading task (22.0\% vs 24.1\%), the
+opposite of the prediction. The two allocations are strongly correlated across the 283 modules
+(Spearman $\rho=0.83$, Pearson $r=0.89$). In this model the allocation is driven by the \emph{architecture}, not by
+what the task demands from each modality. The same holds in an independent earlier run (23.2\% vs 24.4\%).
+
+\textbf{H2 holds partially, and the exception is vision-specific.}
+\begin{itemize}
+    \item \emph{FFN $>$ attention transfers to both towers}, most strongly in the vision encoder (10.5--11.3 vs
+    5.1--5.7). Query and key projections are pruned almost entirely; value, output and FFN matrices stay near full rank.
+    \item \emph{Top layers $>$ bottom layers holds in the vision encoder}: mean rank rises from about 4 to 12 with depth.
+    \item \emph{It reverses in the language model.} Rank peaks at 40--70\% depth, and layers 21--29 are pruned to
+    almost zero. Our interpretation: the middle LM layers are where image tokens are fused with the question, so that
+    is where adaptation pays off. The top layers only map to a short answer vocabulary.
+    \item \emph{The connector keeps full rank} in every run: as the only path between the towers, it is always
+    among the most important matrices.
+\end{itemize}
+
+\textbf{Bonus: is the discovered allocation useful by itself?} If the allocation is informative but AdaLoRA's
+\emph{training} is what hurts, then \emph{plain} LoRA trained with AdaLoRA's final per-module ranks should beat
+uniform LoRA. This comes from an earlier run (same setup, slower AdaLoRA schedule: 10\% warm-up, 20\% final phase,
+reallocation every 10 steps), with the discovered ranks rescaled to the same total rank.
+
+\begin{table}[!htbp]
+\centering\footnotesize\setlength{\abovecaptionskip}{2pt}
+\caption{Bonus, earlier run. Plain LoRA with different rank allocations (accuracy \%, trainable parameters in
+brackets). ``Swapped'' trains each task with the \emph{other} task's allocation.}
+\label{tab:bonus}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\textbf{Allocation} & \textbf{TextVQA} & \textbf{OK-VQA} \\
+\midrule
+Uniform $r{=}8$                   & 43.80 (3.87M) & 40.40 (3.87M) \\
+AdaLoRA-discovered (same task)    & \best{45.28} (4.20M) & \best{41.56} (4.31M) \\
+AdaLoRA-discovered (other task)   & 45.12 (4.31M) & 41.28 (4.20M) \\
+AdaLoRA itself                    & 43.52 & 37.84 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The discovered allocation beats uniform on both tasks (+1.5 and +1.2) and beats AdaLoRA itself (+1.8 and +3.7).
+This is consistent with the allocation being useful and the pruning schedule being what costs accuracy. The other
+task's allocation does almost as well (within 0.3 points), which agrees with the high correlation in H1.
+\emph{This result is suggestive only}, for two reasons:
+\begin{itemize}
+    \item Matching total rank gave 8--11\% more parameters, because the discovered allocations favour the larger FFN
+    matrices. The notebook includes a parameter-matched version (3.84M vs 3.87M) that did not finish within our
+    GPU budget.
+    \item Re-running uniform LoRA with near-identical settings moved TextVQA from 43.80 to 46.62. Run-to-run variation
+    of about 3 points is larger than these gains, and the bootstrap CIs cover only the choice of evaluation questions.
+\end{itemize}
+
+\textbf{Conclusion.} The NLP finding that \emph{FFN matrices matter more} transfers to both towers of a VLM.
+\emph{Top layers matter more} transfers only to the vision encoder, and \emph{reverses} in the language model.
+The cross-modal split of the budget is task-invariant ($\rho=0.83$), which rejects our task--modality hypothesis.
+At Colab-scale training, AdaLoRA's adaptive pruning is significantly worse than uniform LoRA. Its discovered
+allocation may still be useful when reused by plain LoRA. Code: \texttt{part1.ipynb} (seed 42; results, adapters,
+allocations, per-question scores and figures are saved by the notebook).
+
+\endgroup
+\restoregeometry
 
 
 % ===================== Part 2: LLM Agents, Tool Calling ====================
 \newgeometry{top=0.5in, bottom=0.55in, left=0.6in, right=0.6in}
 \begingroup
-\titleformat*{\section}{\large\bfseries}
-\titleformat*{\subsection}{\normalsize\bfseries}
-\titlespacing*{\section}{0pt}{0pt}{4pt}
-\titlespacing*{\subsection}{0pt}{6pt}{2pt}
+\titlespacing*{\section}{0pt}{0pt}{6pt}
+\titlespacing*{\subsection}{0pt}{4pt}{1pt}
 \setlength{\topsep}{2pt}
-\section*{Part 2: LoRA Fine-tuning a Small LLM for Tool Calling}
+\section{Part 2: LoRA Fine-tuning a Small LLM for Tool Calling}
 \footnotesize
-\setlength{\parskip}{2pt}
+\setlength{\parskip}{1pt}
 \setlength{\parindent}{0pt}
 
-\subsection*{1. Setup}
+\subsection{Setup}
 \begin{itemize}
     \item \textbf{Model:} Qwen2.5-0.5B-Instruct, used through its built-in tool-calling chat template (each call is a JSON object wrapped in \verb|<tool_call>| tags). Greedy decoding, at most 128 new tokens per turn.
     \item \textbf{Tools (4):} \verb|calculator| (arithmetic), \verb|unit_convert| (length, mass, $^\circ$C/$^\circ$F), \verb|get_weather| (made-up weather for six Sri Lankan cities) and \verb|lookup_order| (60 made-up orders). The invented values force the model to call the tools instead of answering from memory.
@@ -190,7 +372,7 @@
     \item \textbf{LoRA:} $r=16$, $\alpha=32$, dropout 0.05 on the q, k, v, o, gate, up and down projections (8.80\,M trainable parameters, 1.75\,\%). Loss on assistant tokens only; system, user and tool-result tokens are masked. 2 epochs, learning rate $2\times10^{-4}$ (cosine, 5 warm-up steps), effective batch 16 (micro-batch $2\times8$ accumulation, because batch 8 ran out of memory with Qwen's 152k-token vocabulary), fp16 mixed precision, seed 42. 150 steps in 6\,min\,42\,s on a Colab T4; training loss fell from 0.34 to 0.0003.
 \end{itemize}
 
-\subsection*{2. Baseline vs.\ LoRA (same 100-request test set)}
+\subsection{Baseline vs.\ LoRA (same 100-request test set)}
 \begin{center}
 \begin{tabular}{@{}llrrr@{}}
     \toprule
@@ -205,7 +387,7 @@
 \end{center}
 The baseline never produced malformed JSON: all of its validity failures were tool requests where it made no call at all.
 
-\subsection*{3. Failure analysis}
+\subsection{Failure analysis}
 \noindent
 \begin{minipage}[t]{0.37\linewidth}
     \vspace{0pt}
@@ -238,7 +420,7 @@ The baseline never produced malformed JSON: all of its validity failures were to
 \vspace{4pt}
 The remaining LoRA errors share one cause: \textbf{over-fitting to the training templates} (loss $\approx 2\times10^{-4}$ by epoch 2). The model keys on surface patterns, such as reading ``travelling to \textit{city}'' as the trained ``how many hours until \ldots{} arrives'' chain, and operand order in subtraction, rather than on intent. More varied phrasings, paraphrase augmentation or a single epoch would be the next step. The ignored-result count is also somewhat inflated by a strict answer check that requires both the order status and the item.
 
-\subsection*{4. Would a better prompt alone have been enough?}
+\subsection{Would a better prompt alone have been enough?}
 Only partly: the baseline already produced well-formed calls through Qwen's built-in tool template, so its failures were decisions (whether to call a tool at all in 32 cases, how to report the result in 15), and a stricter system prompt with a few worked examples could plausibly reduce these without any training. However, a 0.5\,B model follows long instructions unreliably, and LoRA removed 49 of the 56 failures after under seven minutes of training (we did not run a prompt-only ablation to measure the gap). The errors LoRA left come from template over-fitting, which better training data, not a better prompt, would address.
 
 \endgroup

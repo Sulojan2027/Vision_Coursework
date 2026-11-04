@@ -1,0 +1,12 @@
+torch
+transformers>=4.46
+peft>=0.13
+datasets
+accelerate
+huggingface_hub
+pillow
+numpy
+pandas
+matplotlib
+scipy
+tqdm

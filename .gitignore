@@ -10,3 +10,6 @@ venv/
 *.pth
 *.ckpt
 data/
+
+# LaTeX build output
+**/latex_report/build/
